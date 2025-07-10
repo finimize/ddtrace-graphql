@@ -62,6 +62,11 @@ def traced_graphql_wrapped(
     }
     _span_kwargs.update(span_kwargs or {})
 
+    # Convert request_string to source for newer graphql-core compatibility
+    if 'request_string' in kwargs:
+        kwargs = kwargs.copy()
+        kwargs['source'] = kwargs.pop('request_string')
+    
     result = func(*args, **kwargs)
     
     # Handle async results
@@ -116,7 +121,12 @@ def _process_result(result, span, ignore_exceptions, span_callback):
             CLIENT_ERROR,
             int(bool(not span.error and result.errors))
         )
-        span.set_metric(INVALID, int(getattr(result, 'invalid', 0)))
+        # For newer graphql-core, determine invalid based on errors and no data
+        invalid_value = getattr(result, 'invalid', None)
+        if invalid_value is None:
+            # Fallback for newer graphql-core: invalid if there are errors and no data
+            invalid_value = int(bool(result.errors and result.data is None))
+        span.set_metric(INVALID, int(invalid_value))
         span.set_metric(DATA_EMPTY, int(getattr(result, 'data', None) is None))
     else:
         span.error = 1

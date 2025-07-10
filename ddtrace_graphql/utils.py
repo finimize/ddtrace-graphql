@@ -21,7 +21,7 @@ def get_request_string(args, kwargs):
     """
     Given ``args``, ``kwargs`` of original function, returns request string.
     """
-    return args[1] if len(args) > 1 else kwargs.get('request_string')
+    return args[1] if len(args) > 1 else kwargs.get('request_string') or kwargs.get('source')
 
 
 def get_query_string(args, kwargs):
@@ -42,15 +42,22 @@ def is_server_error(result, ignore_exceptions):
         error for error in result.errors
         if not isinstance(original_error(error), ignore_exceptions)
     ]
+    
+    # Determine if result is invalid (newer graphql-core compatibility)
+    invalid_value = getattr(result, 'invalid', None)
+    if invalid_value is None:
+        # For newer graphql-core: invalid if there are errors and no data
+        invalid_value = bool(result.errors and result.data is None)
+    
     return bool(
         (
             errors
-            and not getattr(result, 'invalid', False)
+            and not invalid_value
         )
         or
         (
             errors
-            and getattr(result, 'invalid', False)
+            and invalid_value
             and len(result.errors) == 1
             and not isinstance(result.errors[0], GraphQLError)
         )
@@ -88,6 +95,9 @@ def format_error_traceback(error, limit=20):
     """
     Returns ``limit`` lines of ``error``s exception traceback.
     """
+    if error is None:
+        return ""
+    
     buffer_file = StringIO()
     traceback.print_exception(
         type(error),
