@@ -8,8 +8,16 @@ import logging
 import os
 
 import graphql
-import graphql.backend.core
 import wrapt
+
+# Try to import graphql.backend.core for older versions of graphql-core
+try:
+    import graphql.backend.core
+    HAS_BACKEND_CORE = True
+except ImportError:
+    HAS_BACKEND_CORE = False
+    logger = logging.getLogger(__name__)
+    logger.debug("graphql.backend.core not available in this version of graphql-core")
 
 # Try to import unwrap from ddtrace.util, fallback to ddtrace.internal if needed
 try:
@@ -49,10 +57,18 @@ def patch(span_kwargs=None, span_callback=None, ignore_exceptions=()):
     logger.debug("Patching `graphql.graphql` function.")
 
     wrapt.wrap_function_wrapper(graphql, "graphql", wrapper)
+    
+    # Also patch graphql_sync if available (newer versions of graphql-core)
+    if hasattr(graphql, 'graphql_sync'):
+        logger.debug("Patching `graphql.graphql_sync` function.")
+        wrapt.wrap_function_wrapper(graphql, "graphql_sync", wrapper)
 
-    logger.debug("Patching `graphql.backend.core.execute_and_validate` function.")
-
-    wrapt.wrap_function_wrapper(graphql.backend.core, "execute_and_validate", wrapper)
+    # Only patch execute_and_validate if graphql.backend.core is available
+    if HAS_BACKEND_CORE:
+        logger.debug("Patching `graphql.backend.core.execute_and_validate` function.")
+        wrapt.wrap_function_wrapper(graphql.backend.core, "execute_and_validate", wrapper)
+    else:
+        logger.debug("Skipping `graphql.backend.core.execute_and_validate` patch - not available in this version")
 
 
 def unpatch():
@@ -63,9 +79,22 @@ def unpatch():
     except Exception as e:
         logger.warning(f"Failed to unpatch `graphql.graphql` function: {e}")
     
-    logger.debug("Unpatching `graphql.backend.core.execute_and_validate` function.")
-    try:
-        unwrap(graphql.backend.core, "execute_and_validate")
-        logger.debug("Successfully unpatched `graphql.backend.core.execute_and_validate` function.")
-    except Exception as e:
-        logger.warning(f"Failed to unpatch `graphql.backend.core.execute_and_validate` function: {e}")
+    # Also unpatch graphql_sync if available
+    if hasattr(graphql, 'graphql_sync'):
+        logger.debug("Unpatching `graphql.graphql_sync` function.")
+        try:
+            unwrap(graphql, "graphql_sync")
+            logger.debug("Successfully unpatched `graphql.graphql_sync` function.")
+        except Exception as e:
+            logger.warning(f"Failed to unpatch `graphql.graphql_sync` function: {e}")
+    
+    # Only unpatch execute_and_validate if graphql.backend.core is available
+    if HAS_BACKEND_CORE:
+        logger.debug("Unpatching `graphql.backend.core.execute_and_validate` function.")
+        try:
+            unwrap(graphql.backend.core, "execute_and_validate")
+            logger.debug("Successfully unpatched `graphql.backend.core.execute_and_validate` function.")
+        except Exception as e:
+            logger.warning(f"Failed to unpatch `graphql.backend.core.execute_and_validate` function: {e}")
+    else:
+        logger.debug("Skipping `graphql.backend.core.execute_and_validate` unpatch - not available in this version")

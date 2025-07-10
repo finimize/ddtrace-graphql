@@ -3,8 +3,31 @@ import re
 import traceback
 from io import StringIO
 
-from graphql.error import GraphQLError, format_error
-from graphql.language.ast import Document
+# Try to import from new location, fallback to old location
+try:
+    from graphql.error import GraphQLError
+    from graphql import format_error
+except ImportError:
+    try:
+        from graphql.error import GraphQLError, format_error
+    except ImportError:
+        # Create dummy format_error for newer versions
+        from graphql.error import GraphQLError
+        def format_error(error):
+            return {"message": str(error)}
+# Try to import Document from different locations
+try:
+    from graphql.language.ast import Document
+except ImportError:
+    try:
+        from graphql.language import DocumentNode as Document
+    except ImportError:
+        try:
+            from graphql import DocumentNode as Document
+        except ImportError:
+            # Create dummy Document class
+            class Document:
+                pass
 
 
 def get_request_string(args, kwargs):

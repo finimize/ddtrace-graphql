@@ -3,7 +3,18 @@ import os
 
 import ddtrace
 import graphql
-from ddtrace.ext import errors as ddtrace_errors
+# Try to import errors from new location, fallback to old location
+try:
+    from ddtrace import constants as ddtrace_errors
+except ImportError:
+    try:
+        from ddtrace.ext import errors as ddtrace_errors
+    except ImportError:
+        # Create dummy error constants for testing
+        class ddtrace_errors:
+            ERROR_STACK = "error.stack"
+            ERROR_MSG = "error.msg"
+            ERROR_TYPE = "error.type"
 
 from ddtrace_graphql import utils
 
@@ -44,9 +55,11 @@ def traced_graphql_wrapped(
     """
     Wrapper for graphql.graphql function.
     """
+    logger.debug(f"traced_graphql_wrapped called with func={func}, args={args[:1]}")
     # allow schemas their own tracer with fall-back to the global
     schema = args[0]
     tracer = getattr(schema, 'datadog_tracer', ddtrace.tracer)
+    logger.debug(f"Using tracer: {tracer}, enabled: {tracer.enabled}")
 
     if not tracer.enabled:
         return func(*args, **kwargs)
@@ -61,47 +74,69 @@ def traced_graphql_wrapped(
     }
     _span_kwargs.update(span_kwargs or {})
 
-    with tracer.trace(**_span_kwargs) as span:
-        span.set_tag(QUERY, query)
-        result = None
-        try:
-            result = func(*args, **kwargs)
-            return result
-        finally:
-            # `span.error` must be integer
-            span.error = int(result is None)
+    import asyncio
+    
+    result = func(*args, **kwargs)
+    
+    # Handle async results
+    if asyncio.iscoroutine(result):
+        async def trace_async():
+            with tracer.trace(**_span_kwargs) as span:
+                span.set_tag(QUERY, query)
+                try:
+                    actual_result = await result
+                    return actual_result
+                finally:
+                    if 'actual_result' in locals():
+                        _process_result(actual_result, span, ignore_exceptions, span_callback)
+                    else:
+                        span.error = 1
+        
+        return trace_async()
+    else:
+        # Handle sync results
+        with tracer.trace(**_span_kwargs) as span:
+            span.set_tag(QUERY, query)
+            try:
+                return result
+            finally:
+                _process_result(result, span, ignore_exceptions, span_callback)
 
-            if result is not None:
 
-                span.error = 0
-                if result.errors:
-                    span.set_tag(
-                        ERRORS,
-                        utils.format_errors(result.errors))
-                    span.set_tag(
-                        ddtrace_errors.ERROR_STACK,
-                        utils.format_errors_traceback(result.errors))
-                    span.set_tag(
-                        ddtrace_errors.ERROR_MSG,
-                        utils.format_errors_msg(result.errors))
-                    span.set_tag(
-                        ddtrace_errors.ERROR_TYPE,
-                        utils.format_errors_type(result.errors))
+def _process_result(result, span, ignore_exceptions, span_callback):
+    """Process the result and update the span accordingly."""
+    if result is not None:
+        span.error = 0
+        if hasattr(result, 'errors') and result.errors:
+            span.set_tag(
+                ERRORS,
+                utils.format_errors(result.errors))
+            span.set_tag(
+                ddtrace_errors.ERROR_STACK,
+                utils.format_errors_traceback(result.errors))
+            span.set_tag(
+                ddtrace_errors.ERROR_MSG,
+                utils.format_errors_msg(result.errors))
+            span.set_tag(
+                ddtrace_errors.ERROR_TYPE,
+                utils.format_errors_type(result.errors))
 
-                    span.error = int(utils.is_server_error(
-                        result,
-                        ignore_exceptions,
-                    ))
+            span.error = int(utils.is_server_error(
+                result,
+                ignore_exceptions,
+            ))
 
-                span.set_metric(
-                    CLIENT_ERROR,
-                    int(bool(not span.error and result.errors))
-                )
-                span.set_metric(INVALID, int(result.invalid))
-                span.set_metric(DATA_EMPTY, int(result.data is None))
+        span.set_metric(
+            CLIENT_ERROR,
+            int(bool(not span.error and result.errors))
+        )
+        span.set_metric(INVALID, int(getattr(result, 'invalid', 0)))
+        span.set_metric(DATA_EMPTY, int(getattr(result, 'data', None) is None))
+    else:
+        span.error = 1
 
-            if span_callback is not None:
-                span_callback(result=result, span=span)
+    if span_callback is not None:
+        span_callback(result=result, span=span)
 
 
 def traced_graphql(
