@@ -10,11 +10,25 @@ import os
 import graphql
 import graphql.backend.core
 import wrapt
-from ddtrace.util import unwrap
+
+# Try to import unwrap from ddtrace.util, fallback to ddtrace.internal if needed
+try:
+    from ddtrace.util import unwrap
+    logger = logging.getLogger(__name__)
+    logger.debug("Successfully imported unwrap from ddtrace.util")
+except ImportError as e:
+    logger = logging.getLogger(__name__)
+    logger.warning(f"Failed to import unwrap from ddtrace.util: {e}")
+    try:
+        from ddtrace.internal.utils.wrappers import unwrap
+        logger.info("Successfully imported unwrap from ddtrace.internal.utils.wrappers")
+    except ImportError as fallback_error:
+        logger.error(f"Failed to import unwrap from ddtrace.internal: {fallback_error}")
+        # Fallback to wrapt's unwrap functionality
+        from wrapt import unwrap_function_wrapper as unwrap
+        logger.info("Using wrapt.unwrap_function_wrapper as fallback")
 
 from ddtrace_graphql.base import traced_graphql_wrapped
-
-logger = logging.getLogger(__name__)
 
 
 def patch(span_kwargs=None, span_callback=None, ignore_exceptions=()):
@@ -43,6 +57,15 @@ def patch(span_kwargs=None, span_callback=None, ignore_exceptions=()):
 
 def unpatch():
     logger.debug("Unpatching `graphql.graphql` function.")
-    unwrap(graphql, "graphql")
+    try:
+        unwrap(graphql, "graphql")
+        logger.debug("Successfully unpatched `graphql.graphql` function.")
+    except Exception as e:
+        logger.warning(f"Failed to unpatch `graphql.graphql` function: {e}")
+    
     logger.debug("Unpatching `graphql.backend.core.execute_and_validate` function.")
-    unwrap(graphql.backend.core, "execute_and_validate")
+    try:
+        unwrap(graphql.backend.core, "execute_and_validate")
+        logger.debug("Successfully unpatched `graphql.backend.core.execute_and_validate` function.")
+    except Exception as e:
+        logger.warning(f"Failed to unpatch `graphql.backend.core.execute_and_validate` function: {e}")
