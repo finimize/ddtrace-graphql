@@ -1,20 +1,10 @@
 import logging
 import os
+import asyncio
 
 import ddtrace
 import graphql
-# Try to import errors from new location, fallback to old location
-try:
-    from ddtrace import constants as ddtrace_errors
-except ImportError:
-    try:
-        from ddtrace.ext import errors as ddtrace_errors
-    except ImportError:
-        # Create dummy error constants for testing
-        class ddtrace_errors:
-            ERROR_STACK = "error.stack"
-            ERROR_MSG = "error.msg"
-            ERROR_TYPE = "error.type"
+from ddtrace import constants as ddtrace_errors
 
 from ddtrace_graphql import utils
 
@@ -55,11 +45,9 @@ def traced_graphql_wrapped(
     """
     Wrapper for graphql.graphql function.
     """
-    logger.debug(f"traced_graphql_wrapped called with func={func}, args={args[:1]}")
     # allow schemas their own tracer with fall-back to the global
     schema = args[0]
     tracer = getattr(schema, 'datadog_tracer', ddtrace.tracer)
-    logger.debug(f"Using tracer: {tracer}, enabled: {tracer.enabled}")
 
     if not tracer.enabled:
         return func(*args, **kwargs)
@@ -74,8 +62,6 @@ def traced_graphql_wrapped(
     }
     _span_kwargs.update(span_kwargs or {})
 
-    import asyncio
-    
     result = func(*args, **kwargs)
     
     # Handle async results

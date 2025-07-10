@@ -2,51 +2,9 @@ import json
 import os
 
 import graphql
-# Try to import encoders from new location, fallback to old location
-try:
-    from ddtrace.internal.encoding import JSONEncoder, MsgpackEncoder
-except ImportError:
-    try:
-        from ddtrace.encoding import JSONEncoder, MsgpackEncoder
-    except ImportError:
-        # If neither works, create dummy encoders for testing
-        class JSONEncoder:
-            def encode_traces(self, traces):
-                pass
-            def encode_services(self, services):
-                pass
-        
-        class MsgpackEncoder:
-            def encode_traces(self, traces):
-                pass
-            def encode_services(self, services):
-                pass
-# Try to import errors from new location, fallback to old location
-try:
-    from ddtrace import constants as ddtrace_errors
-except ImportError:
-    try:
-        from ddtrace.ext import errors as ddtrace_errors
-    except ImportError:
-        # Create dummy error constants for testing
-        class ddtrace_errors:
-            ERROR_STACK = "error.stack"
-            ERROR_MSG = "error.msg"
-            ERROR_TYPE = "error.type"
-# For newer ddtrace versions, use the tracer instance directly
 import ddtrace
-
-# Try to import AgentWriter from new location, fallback to old location
-try:
-    from ddtrace.internal.writer import AgentWriter
-except ImportError:
-    try:
-        from ddtrace.writer import AgentWriter
-    except ImportError:
-        # Create dummy writer for testing
-        class AgentWriter:
-            def __init__(self):
-                pass
+from ddtrace import constants as ddtrace_errors
+from ddtrace.internal.writer import AgentWriter
 from graphql import GraphQLField, GraphQLObjectType, GraphQLString
 from graphql.execution import ExecutionResult
 from graphql.language.parser import parse as graphql_parse
@@ -63,48 +21,29 @@ from ddtrace_graphql.base import traced_graphql_wrapped
 
 class DummyWriter(AgentWriter):
     """
-    # NB: This is coy fo DummyWriter class from ddtraces tests suite
+    # NB: This is copy of DummyWriter class from ddtraces tests suite
 
     DummyWriter is a small fake writer used for tests. not thread-safe.
     """
 
     def __init__(self):
         # original call with agent_url for newer ddtrace versions
-        try:
-            super(DummyWriter, self).__init__(agent_url="http://localhost:8126")
-        except TypeError:
-            # Fallback for older ddtrace versions that don't require agent_url
-            super(DummyWriter, self).__init__()
+        super(DummyWriter, self).__init__(agent_url="http://localhost:8126")
         # dummy components
         self.spans = []
         self.traces = []
         self.services = {}
-        self.json_encoder = JSONEncoder()
-        self.msgpack_encoder = MsgpackEncoder()
 
     def write(self, spans=None, services=None):
         if spans:
-            # the traces encoding expect a list of traces so we
-            # put spans in a list like we do in the real execution path
-            # with both encoders
-            if hasattr(self, 'json_encoder') and hasattr(self, 'msgpack_encoder'):
-                trace = [spans]
-                self.json_encoder.encode_traces(trace)
-                self.msgpack_encoder.encode_traces(trace)
-                self.spans += spans
-                self.traces += trace
+            # For newer ddtrace, collect spans directly
+            if isinstance(spans, list):
+                self.spans.extend(spans)
             else:
-                # For newer ddtrace, just collect spans directly
-                if isinstance(spans, list):
-                    self.spans.extend(spans)
-                else:
-                    self.spans.append(spans)
-                self.traces.append(spans)
+                self.spans.append(spans)
+            self.traces.append(spans)
 
         if services:
-            if hasattr(self, 'json_encoder') and hasattr(self, 'msgpack_encoder'):
-                self.json_encoder.encode_services(services)
-                self.msgpack_encoder.encode_services(services)
             self.services.update(services)
 
     def pop(self):
@@ -184,6 +123,15 @@ class TestGraphQL:
         assert isinstance(graphql.graphql, FunctionWrapper)
 
         result = graphql.graphql(schema, '{ hello }')
+        if asyncio.iscoroutine(result):
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(result)
+            finally:
+                loop.close()
+                
+        tracer.flush()
         span = tracer.writer.pop()[0]
         assert cb_args['span'] is span
         assert cb_args['result'] is result

@@ -3,31 +3,18 @@ import re
 import traceback
 from io import StringIO
 
-# Try to import from new location, fallback to old location
-try:
-    from graphql.error import GraphQLError
-    from graphql import format_error
-except ImportError:
-    try:
-        from graphql.error import GraphQLError, format_error
-    except ImportError:
-        # Create dummy format_error for newer versions
-        from graphql.error import GraphQLError
-        def format_error(error):
-            return {"message": str(error)}
-# Try to import Document from different locations
-try:
-    from graphql.language.ast import Document
-except ImportError:
-    try:
-        from graphql.language import DocumentNode as Document
-    except ImportError:
-        try:
-            from graphql import DocumentNode as Document
-        except ImportError:
-            # Create dummy Document class
-            class Document:
-                pass
+from graphql.error import GraphQLError
+from graphql import DocumentNode
+
+
+def format_error(error):
+    """Format a GraphQLError for newer graphql-core versions."""
+    if hasattr(error, 'formatted'):
+        return error.formatted
+    elif hasattr(error, 'message'):
+        return {"message": str(error.message)}
+    else:
+        return {"message": str(error)}
 
 
 def get_request_string(args, kwargs):
@@ -42,7 +29,7 @@ def get_query_string(args, kwargs):
     Given ``args``, ``kwargs`` of original function, returns query as string.
     """
     rs = get_request_string(args, kwargs)
-    return rs.loc.source.body if isinstance(rs, Document) else rs
+    return rs.loc.source.body if isinstance(rs, DocumentNode) else rs
 
 
 def is_server_error(result, ignore_exceptions):
@@ -58,12 +45,12 @@ def is_server_error(result, ignore_exceptions):
     return bool(
         (
             errors
-            and not result.invalid
+            and not getattr(result, 'invalid', False)
         )
         or
         (
             errors
-            and result.invalid
+            and getattr(result, 'invalid', False)
             and len(result.errors) == 1
             and not isinstance(result.errors[0], GraphQLError)
         )
@@ -90,7 +77,6 @@ def format_errors(errors):
     """
     return json.dumps(
         [
-            # fix for graphql-core==1.x
             format_error(err) if hasattr(err, 'message') else str(err)
             for err in errors
         ],
