@@ -4,7 +4,12 @@ import traceback
 from io import StringIO
 
 from graphql.error import GraphQLError
-from graphql import DocumentNode
+try:
+    # graphql-core 3.x
+    from graphql import DocumentNode
+except ImportError:
+    # graphql-core 2.x
+    from graphql.language.ast import Document as DocumentNode
 
 
 def format_error(error):
