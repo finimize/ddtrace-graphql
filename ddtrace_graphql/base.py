@@ -1,9 +1,10 @@
 import logging
 import os
+import asyncio
 
 import ddtrace
 import graphql
-from ddtrace.ext import errors as ddtrace_errors
+from ddtrace import constants as ddtrace_errors
 
 from ddtrace_graphql import utils
 
@@ -61,47 +62,77 @@ def traced_graphql_wrapped(
     }
     _span_kwargs.update(span_kwargs or {})
 
-    with tracer.trace(**_span_kwargs) as span:
-        span.set_tag(QUERY, query)
-        result = None
-        try:
-            result = func(*args, **kwargs)
-            return result
-        finally:
-            # `span.error` must be integer
-            span.error = int(result is None)
+    # Convert request_string to source for newer graphql-core compatibility
+    if 'request_string' in kwargs:
+        kwargs = kwargs.copy()
+        kwargs['source'] = kwargs.pop('request_string')
+    
+    result = func(*args, **kwargs)
+    
+    # Handle async results
+    if asyncio.iscoroutine(result):
+        async def trace_async():
+            with tracer.trace(**_span_kwargs) as span:
+                span.set_tag(QUERY, query)
+                try:
+                    actual_result = await result
+                    return actual_result
+                finally:
+                    if 'actual_result' in locals():
+                        _process_result(actual_result, span, ignore_exceptions, span_callback)
+                    else:
+                        span.error = 1
+        
+        return trace_async()
+    else:
+        # Handle sync results
+        with tracer.trace(**_span_kwargs) as span:
+            span.set_tag(QUERY, query)
+            try:
+                return result
+            finally:
+                _process_result(result, span, ignore_exceptions, span_callback)
 
-            if result is not None:
 
-                span.error = 0
-                if result.errors:
-                    span.set_tag(
-                        ERRORS,
-                        utils.format_errors(result.errors))
-                    span.set_tag(
-                        ddtrace_errors.ERROR_STACK,
-                        utils.format_errors_traceback(result.errors))
-                    span.set_tag(
-                        ddtrace_errors.ERROR_MSG,
-                        utils.format_errors_msg(result.errors))
-                    span.set_tag(
-                        ddtrace_errors.ERROR_TYPE,
-                        utils.format_errors_type(result.errors))
+def _process_result(result, span, ignore_exceptions, span_callback):
+    """Process the result and update the span accordingly."""
+    if result is not None:
+        span.error = 0
+        if hasattr(result, 'errors') and result.errors:
+            span.set_tag(
+                ERRORS,
+                utils.format_errors(result.errors))
+            span.set_tag(
+                ddtrace_errors.ERROR_STACK,
+                utils.format_errors_traceback(result.errors))
+            span.set_tag(
+                ddtrace_errors.ERROR_MSG,
+                utils.format_errors_msg(result.errors))
+            span.set_tag(
+                ddtrace_errors.ERROR_TYPE,
+                utils.format_errors_type(result.errors))
 
-                    span.error = int(utils.is_server_error(
-                        result,
-                        ignore_exceptions,
-                    ))
+            span.error = int(utils.is_server_error(
+                result,
+                ignore_exceptions,
+            ))
 
-                span.set_metric(
-                    CLIENT_ERROR,
-                    int(bool(not span.error and result.errors))
-                )
-                span.set_metric(INVALID, int(result.invalid))
-                span.set_metric(DATA_EMPTY, int(result.data is None))
+        span.set_metric(
+            CLIENT_ERROR,
+            int(bool(not span.error and result.errors))
+        )
+        # For newer graphql-core, determine invalid based on errors and no data
+        invalid_value = getattr(result, 'invalid', None)
+        if invalid_value is None:
+            # Fallback for newer graphql-core: invalid if there are errors and no data
+            invalid_value = int(bool(result.errors and result.data is None))
+        span.set_metric(INVALID, int(invalid_value))
+        span.set_metric(DATA_EMPTY, int(getattr(result, 'data', None) is None))
+    else:
+        span.error = 1
 
-            if span_callback is not None:
-                span_callback(result=result, span=span)
+    if span_callback is not None:
+        span_callback(result=result, span=span)
 
 
 def traced_graphql(

@@ -16,22 +16,30 @@ only certain calls you can use the ``traced_graphql`` function::
 """
 
 
-from ddtrace.contrib.util import require_modules
+import logging
 
-required_modules = ['graphql']
+logger = logging.getLogger(__name__)
 
-with require_modules(required_modules) as missing_modules:
-    if not missing_modules:
-        from .base import (
-            TracedGraphQLSchema, traced_graphql,
-            TYPE, SERVICE, QUERY, ERRORS, INVALID, RES_NAME, DATA_EMPTY,
-            CLIENT_ERROR
-        )
-        from .patch import patch, unpatch
-        __all__ = [
-            'TracedGraphQLSchema',
-            'patch', 'unpatch', 'traced_graphql',
-            'TYPE', 'SERVICE', 'QUERY', 'ERRORS', 'INVALID',
-            'RES_NAME', 'DATA_EMPTY', 'CLIENT_ERROR',
-        ]
-
+# Import required modules directly - ddtrace >= 1.5.5 support only
+try:
+    import graphql
+    logger.debug("Successfully imported graphql module")
+    
+    from .base import (
+        TracedGraphQLSchema, traced_graphql,
+        TYPE, SERVICE, QUERY, ERRORS, INVALID, RES_NAME, DATA_EMPTY,
+        CLIENT_ERROR
+    )
+    from .patch import patch, unpatch
+    __all__ = [
+        'TracedGraphQLSchema',
+        'patch', 'unpatch', 'traced_graphql',
+        'TYPE', 'SERVICE', 'QUERY', 'ERRORS', 'INVALID',
+        'RES_NAME', 'DATA_EMPTY', 'CLIENT_ERROR',
+    ]
+    logger.info("Successfully initialized ddtrace-graphql")
+    
+except ImportError as error:
+    logger.error(f"Failed to import required modules: {error}")
+    logger.error("ddtrace-graphql requires ddtrace >= 1.5.5 and graphql-core")
+    raise

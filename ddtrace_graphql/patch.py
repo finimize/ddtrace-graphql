@@ -5,12 +5,10 @@ https://github.com/graphql-python/graphql-core
 """
 
 import logging
-import os
 
 import graphql
-import graphql.backend.core
 import wrapt
-from ddtrace.util import unwrap
+from ddtrace.internal.utils.wrappers import unwrap
 
 from ddtrace_graphql.base import traced_graphql_wrapped
 
@@ -33,16 +31,30 @@ def patch(span_kwargs=None, span_callback=None, ignore_exceptions=()):
         )
 
     logger.debug("Patching `graphql.graphql` function.")
-
     wrapt.wrap_function_wrapper(graphql, "graphql", wrapper)
-
-    logger.debug("Patching `graphql.backend.core.execute_and_validate` function.")
-
-    wrapt.wrap_function_wrapper(graphql.backend.core, "execute_and_validate", wrapper)
+    
+    # Also patch graphql_sync if available (newer versions of graphql-core)
+    if hasattr(graphql, 'graphql_sync'):
+        logger.debug("Patching `graphql.graphql_sync` function.")
+        wrapt.wrap_function_wrapper(graphql, "graphql_sync", wrapper)
 
 
 def unpatch():
+    """
+    Unpatches the graphql-core library to remove tracing.
+    """
     logger.debug("Unpatching `graphql.graphql` function.")
-    unwrap(graphql, "graphql")
-    logger.debug("Unpatching `graphql.backend.core.execute_and_validate` function.")
-    unwrap(graphql.backend.core, "execute_and_validate")
+    try:
+        unwrap(graphql, "graphql")
+        logger.debug("Successfully unpatched `graphql.graphql` function.")
+    except Exception as e:
+        logger.warning(f"Failed to unpatch `graphql.graphql` function: {e}")
+    
+    # Also unpatch graphql_sync if available
+    if hasattr(graphql, 'graphql_sync'):
+        logger.debug("Unpatching `graphql.graphql_sync` function.")
+        try:
+            unwrap(graphql, "graphql_sync")
+            logger.debug("Successfully unpatched `graphql.graphql_sync` function.")
+        except Exception as e:
+            logger.warning(f"Failed to unpatch `graphql.graphql_sync` function: {e}")
